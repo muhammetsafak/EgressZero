@@ -1,0 +1,9 @@
+.git
+.gitignore
+README.md
+Makefile
+docker-compose.yml
+Dockerfile
+egresszero
+dist/
+coverage.out
