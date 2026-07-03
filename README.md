@@ -1,5 +1,10 @@
 # EgressZero
 
+[![CI](https://github.com/muhammetsafak/EgressZero/actions/workflows/ci.yml/badge.svg)](https://github.com/muhammetsafak/EgressZero/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/muhammetsafak/egresszero.svg)](https://pkg.go.dev/github.com/muhammetsafak/egresszero)
+[![Go Report Card](https://goreportcard.com/badge/github.com/muhammetsafak/egresszero)](https://goreportcard.com/report/github.com/muhammetsafak/egresszero)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A high-performance, lightweight Go reverse proxy for AWS S3 and S3-compatible object storage, built to sit behind Cloudflare (or any CDN) so that files are cached at the edge and **S3 egress costs drop to ~zero**.
 
 ```
