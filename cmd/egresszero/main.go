@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,9 +18,17 @@ import (
 	"github.com/muhammetsafak/egresszero/internal/config"
 	"github.com/muhammetsafak/egresszero/internal/proxy"
 	"github.com/muhammetsafak/egresszero/internal/s3client"
+	"github.com/muhammetsafak/egresszero/internal/version"
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.Version())
+		return
+	}
+
 	if err := run(); err != nil {
 		slog.Error("fatal", slog.Any("error", err))
 		os.Exit(1)
@@ -57,6 +67,7 @@ func run() error {
 	}
 
 	logger.Info("starting",
+		slog.String("version", version.Version()),
 		slog.String("addr", cfg.ListenAddr),
 		slog.String("bucket", cfg.Bucket),
 		slog.String("endpoint", cfg.Endpoint),
