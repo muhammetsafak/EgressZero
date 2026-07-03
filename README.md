@@ -118,3 +118,7 @@ make compose-up  # MinIO + proxy end-to-end stack
 - Prometheus metrics (deliberately left out of the MVP)
 - Request coalescing (`singleflight`) for cold-cache stampedes
 - Rolling per-write deadlines via `http.NewResponseController` as an alternative to `WriteTimeout: 0`
+
+## License
+
+[MIT](LICENSE)
