@@ -26,6 +26,7 @@ The proxy streams objects straight from S3 to the client — bodies are never bu
 - **CDN-only protection** — optional shared-secret header check so nobody bypasses the CDN and re-bills your egress
 - **No leaks** — S3 error details, request IDs and bucket names never reach clients; error responses are `no-store`
 - **Optional Prometheus metrics** — request/duration/bytes, in-flight gauge, S3 first-byte latency and upstream errors, on a separate listener so `/metrics` stays off the CDN
+- **Request coalescing** — concurrent identical revalidations (`If-None-Match`) and HEADs collapse into one S3 call, blunting cold-cache stampedes without ever multiplexing a body stream
 - **Single static binary** — distroless Docker image, configured entirely by environment variables
 
 ## Quickstart
@@ -68,6 +69,7 @@ go install github.com/muhammetsafak/egresszero/cmd/egresszero@latest
 | `LOG_REQUESTS` | no | `false` | One structured JSON log line per request |
 | `SHUTDOWN_TIMEOUT` | no | `15s` | Graceful-shutdown drain window |
 | `WRITE_IDLE_TIMEOUT` | no | `2m` | Disconnect a client that has not accepted any body bytes for this long (rolling deadline; slow-but-alive clients are unaffected). `0` disables |
+| `COALESCE` | no | `true` | Collapse concurrent identical revalidations and HEADs into one S3 call. `false` disables |
 
 Startup fails fast and reports **all** configuration errors at once.
 
@@ -109,6 +111,7 @@ The bundled `docker-compose.yml` starts MinIO, seeds a `demo` bucket and runs th
 - **Headers forwarded**: `Content-Type`, `Content-Length`, `ETag`, `Last-Modified`, `Cache-Control`, `Content-Encoding`, `Content-Disposition`, `Content-Language`, `Expires`, `Content-Range`, plus `Accept-Ranges: bytes`. Nothing else (no `x-amz-*`, SSE or version headers).
 - **Memory**: per-request cost is flat (a 1 GB download costs the same as a 1 KB one), but total RSS scales with the number of *simultaneously active* streams — roughly 150–260 KB each at high concurrency. Budget on real simultaneity, not peak request count. `GOMEMLIMIT` trims the runtime's GC headroom (it cut RSS ~35% at 1000 concurrent in testing) but cannot go below the live working set. See [docs/loadtest.md](docs/loadtest.md) for the reproducible benchmark and measured numbers.
 - **Stalled clients**: the server's `WriteTimeout` is deliberately 0 (a fixed value would kill long downloads); instead, a rolling per-write deadline (`WRITE_IDLE_TIMEOUT`, default 2m) disconnects clients that stop accepting bytes while leaving slow-but-active downloads untouched.
+- **Coalescing**: with `COALESCE` on (default), concurrent identical revalidations (`If-None-Match`/`If-Modified-Since`) and HEADs collapse into a single S3 call — the shared result is always body-less (a 304 or metadata), so nothing is buffered. If a coalesced revalidation turns out to be a `200` (the object changed), the body is **not** shared: the request that made the call streams it, and the others each issue their own GET, so a stream is never multiplexed across clients and the memory ceiling holds. Full-body cache-miss downloads are never coalesced, for the same reason. The shared upstream call is detached from any single client's context, so one client disconnecting does not fail the others.
 
 ## Limitations (by design, documented)
 
@@ -128,6 +131,7 @@ Set `METRICS_ADDR` (e.g. `:9090`) to expose Prometheus metrics at `/metrics` on 
 | `egresszero_in_flight_requests` | gauge | — |
 | `egresszero_upstream_request_duration_seconds` | histogram | — (S3 time to first byte) |
 | `egresszero_upstream_errors_total` | counter | `status` (4xx/5xx and 499) |
+| `egresszero_coalesced_requests_total` | counter | — (requests served from a shared upstream call) |
 
 Standard Go runtime and process collectors (`go_*`, `process_*`) are included. Health probes to `/healthz` are excluded from request metrics.
 
@@ -142,10 +146,6 @@ make compose-up  # MinIO + proxy end-to-end stack
 ```
 
 `go test ./internal/proxy/ -run TestMemoryCeiling` proves the streaming memory ceiling: 50 concurrent 256 MB downloads held mid-flight may not grow the heap by more than 20 MB. For a full end-to-end memory/concurrency benchmark (up to 1000 simultaneous streams against MinIO, with real RSS numbers), see [docs/loadtest.md](docs/loadtest.md) and `scripts/loadtest.sh`.
-
-## Future work
-
-- Request coalescing (`singleflight`) for cold-cache stampedes
 
 ## License
 

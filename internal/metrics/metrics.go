@@ -21,6 +21,7 @@ type Metrics struct {
 	inFlight        prometheus.Gauge
 	upstreamLatency prometheus.Histogram
 	upstreamErrors  *prometheus.CounterVec
+	coalesced       prometheus.Counter
 	handler         http.Handler
 }
 
@@ -54,6 +55,10 @@ func New() *Metrics {
 			Name: "egresszero_upstream_errors_total",
 			Help: "Non-success outcomes by classified HTTP status (4xx/5xx and 499).",
 		}, []string{"status"}),
+		coalesced: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "egresszero_coalesced_requests_total",
+			Help: "Requests served from a shared upstream call instead of their own.",
+		}),
 	}
 
 	reg := prometheus.NewRegistry()
@@ -61,7 +66,7 @@ func New() *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.requests, m.duration, m.responseBytes,
-		m.inFlight, m.upstreamLatency, m.upstreamErrors,
+		m.inFlight, m.upstreamLatency, m.upstreamErrors, m.coalesced,
 	)
 	m.handler = promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 	return m
@@ -88,3 +93,5 @@ func (m *Metrics) ObserveRequest(method string, status int, bytes int64, seconds
 		m.responseBytes.Add(float64(bytes))
 	}
 }
+
+func (m *Metrics) IncCoalesced() { m.coalesced.Inc() }

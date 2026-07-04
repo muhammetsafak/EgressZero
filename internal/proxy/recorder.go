@@ -18,6 +18,9 @@ type Recorder interface {
 	// ObserveRequest records a completed request: its method, final
 	// status, body bytes streamed and total duration in seconds.
 	ObserveRequest(method string, status int, bytes int64, seconds float64)
+	// IncCoalesced counts a request served from a shared upstream call
+	// instead of issuing its own (a coalesced revalidation or HEAD).
+	IncCoalesced()
 }
 
 // nopRecorder is the zero-overhead Recorder used when metrics are off.
@@ -28,3 +31,4 @@ func (nopRecorder) DecInFlight()                               {}
 func (nopRecorder) ObserveUpstreamLatency(float64)             {}
 func (nopRecorder) IncUpstreamError(int)                       {}
 func (nopRecorder) ObserveRequest(string, int, int64, float64) {}
+func (nopRecorder) IncCoalesced()                              {}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/muhammetsafak/egresszero/internal/config"
 	"github.com/muhammetsafak/egresszero/internal/s3client"
@@ -41,6 +42,8 @@ type Handler struct {
 	logRequests      bool
 	logger           *slog.Logger
 	metrics          Recorder
+	coalesce         bool
+	group            singleflight.Group
 }
 
 // New builds the handler. A nil Recorder disables instrumentation with
@@ -60,6 +63,7 @@ func New(store ObjectStore, cfg config.Config, logger *slog.Logger, rec Recorder
 		logRequests:      cfg.LogRequests,
 		logger:           logger,
 		metrics:          rec,
+		coalesce:         cfg.Coalesce,
 	}
 	if cfg.AuthSecret != "" {
 		sum := sha256.Sum256([]byte(cfg.AuthSecret))
@@ -160,8 +164,10 @@ func isETagValue(v string) bool {
 	return strings.HasPrefix(v, `"`) || strings.HasPrefix(v, "W/")
 }
 
-func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, int64) {
-	in := &s3.GetObjectInput{
+// buildGetInput maps the request to a GetObjectInput. ifRangeApplied is
+// true when an If-Range precondition (IfMatch/IfUnmodifiedSince) was set.
+func (h *Handler) buildGetInput(r *http.Request, key string) (in *s3.GetObjectInput, ifRangeApplied bool) {
+	in = &s3.GetObjectInput{
 		Bucket: aws.String(h.bucket),
 		Key:    aws.String(key),
 	}
@@ -183,7 +189,6 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, 
 	// no If-Range, so translate it to a precondition on the ranged GET
 	// (IfMatch for an entity-tag, IfUnmodifiedSince for a date) and, on
 	// 412, retry once without the range to return the full representation.
-	ifRangeApplied := false
 	if rng != "" {
 		if ir := r.Header.Get("If-Range"); ir != "" {
 			if isETagValue(ir) {
@@ -197,7 +202,24 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, 
 			// malformed; ignore it and serve the range normally.
 		}
 	}
+	return in, ifRangeApplied
+}
 
+func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, int64) {
+	in, ifRangeApplied := h.buildGetInput(r, key)
+	// Only revalidation requests (with a validator and no If-Range) can
+	// resolve to a shareable, body-less 304 and are worth coalescing.
+	// Everything else streams its own body.
+	if h.coalesce && !ifRangeApplied &&
+		(in.IfNoneMatch != nil || in.IfModifiedSince != nil) {
+		return h.getCoalesced(w, r, in)
+	}
+	return h.getDirect(w, r, in, ifRangeApplied)
+}
+
+// getDirect performs the GetObject (with the If-Range 412 fallback) and
+// streams the body. It is the uncoalesced path.
+func (h *Handler) getDirect(w http.ResponseWriter, r *http.Request, in *s3.GetObjectInput, ifRangeApplied bool) (int, int64) {
 	upstreamStart := time.Now()
 	out, err := h.store.GetObject(r.Context(), in)
 	h.metrics.ObserveUpstreamLatency(time.Since(upstreamStart).Seconds())
@@ -217,6 +239,12 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, 
 			return h.writeError(w, r, err), 0
 		}
 	}
+	return h.streamOut(w, r, out)
+}
+
+// streamOut writes headers and streams a successful GetObject body,
+// closing it when done.
+func (h *Handler) streamOut(w http.ResponseWriter, r *http.Request, out *s3.GetObjectOutput) (int, int64) {
 	defer out.Body.Close()
 
 	writeMeta(w.Header(), metaFromGet(out), h.cacheControl)
@@ -276,7 +304,7 @@ func (d *deadlineRefresher) Read(p []byte) (int, error) {
 	return d.body.Read(p)
 }
 
-func (h *Handler) head(w http.ResponseWriter, r *http.Request, key string) (int, int64) {
+func (h *Handler) buildHeadInput(r *http.Request, key string) *s3.HeadObjectInput {
 	in := &s3.HeadObjectInput{
 		Bucket: aws.String(h.bucket),
 		Key:    aws.String(key),
@@ -291,17 +319,34 @@ func (h *Handler) head(w http.ResponseWriter, r *http.Request, key string) (int,
 			in.IfModifiedSince = aws.Time(t)
 		}
 	}
+	return in
+}
 
+func (h *Handler) head(w http.ResponseWriter, r *http.Request, key string) (int, int64) {
+	in := h.buildHeadInput(r, key)
+	// A HEAD response is always body-less, so its outcome (metadata or a
+	// 304/error) is fully shareable — coalesce every HEAD.
+	if h.coalesce {
+		return h.headCoalesced(w, r, in)
+	}
+	return h.headDirect(w, r, in)
+}
+
+func (h *Handler) headDirect(w http.ResponseWriter, r *http.Request, in *s3.HeadObjectInput) (int, int64) {
 	upstreamStart := time.Now()
 	out, err := h.store.HeadObject(r.Context(), in)
 	h.metrics.ObserveUpstreamLatency(time.Since(upstreamStart).Seconds())
 	if err != nil {
 		return h.writeError(w, r, err), 0
 	}
+	return h.writeHeadMeta(w, metaFromHead(out))
+}
 
+// writeHeadMeta renders a successful HEAD response from shared metadata.
+func (h *Handler) writeHeadMeta(w http.ResponseWriter, meta objectMeta) (int, int64) {
 	// For a bodiless handler net/http will not infer Content-Length;
 	// writeMeta sets it explicitly from the S3 output.
-	writeMeta(w.Header(), metaFromHead(out), h.cacheControl)
+	writeMeta(w.Header(), meta, h.cacheControl)
 	w.WriteHeader(http.StatusOK)
 	return http.StatusOK, 0
 }

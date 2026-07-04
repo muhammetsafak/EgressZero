@@ -23,6 +23,7 @@ type fakeStore struct {
 	getFn     func(ctx context.Context, in *s3.GetObjectInput) (*s3.GetObjectOutput, error)
 	getOut    *s3.GetObjectOutput
 	getErr    error
+	headFn    func(ctx context.Context, in *s3.HeadObjectInput) (*s3.HeadObjectOutput, error)
 	headOut   *s3.HeadObjectOutput
 	headErr   error
 	lastGet   *s3.GetObjectInput
@@ -55,6 +56,9 @@ func (f *fakeStore) HeadObject(ctx context.Context, in *s3.HeadObjectInput, _ ..
 	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("operation error S3: HeadObject: %w", err)
+	}
+	if f.headFn != nil {
+		return f.headFn(ctx, in)
 	}
 	if f.headErr != nil {
 		return nil, f.headErr

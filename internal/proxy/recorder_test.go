@@ -19,6 +19,7 @@ type capturingRecorder struct {
 	upstreamCalls  int
 	upstreamErrors []int
 	requests       []recordedRequest
+	coalesced      int
 }
 
 type recordedRequest struct {
@@ -54,6 +55,11 @@ func (c *capturingRecorder) ObserveRequest(method string, status int, bytes int6
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.requests = append(c.requests, recordedRequest{method, status, bytes})
+}
+func (c *capturingRecorder) IncCoalesced() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.coalesced++
 }
 
 func handlerWithRecorder(store ObjectStore, rec Recorder, mutate func(*config.Config)) *Handler {

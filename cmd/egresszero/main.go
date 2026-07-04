@@ -95,6 +95,7 @@ func run() error {
 		slog.Bool("auth_enabled", cfg.AuthSecret != ""),
 		slog.Duration("write_idle_timeout", cfg.WriteIdleTimeout),
 		slog.String("metrics_addr", cfg.MetricsAddr),
+		slog.Bool("coalesce", cfg.Coalesce),
 	)
 
 	errCh := make(chan error, 1)

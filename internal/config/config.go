@@ -56,6 +56,12 @@ type Config struct {
 	// the stream progresses, so slow-but-alive clients are unaffected.
 	// Zero disables it.
 	WriteIdleTimeout time.Duration
+	// Coalesce enables collapsing concurrent identical revalidation
+	// (If-None-Match / If-Modified-Since) and HEAD lookups into a single
+	// upstream call, to blunt cold-cache stampedes. Body-bearing 200/206
+	// responses are never shared, so the streaming memory ceiling is
+	// unaffected.
+	Coalesce bool
 }
 
 // FromEnv builds a Config from environment variables. All validation
@@ -102,6 +108,9 @@ func FromEnv() (Config, error) {
 		errs = append(errs, err)
 	}
 	if cfg.WriteIdleTimeout, err = envDurationZeroOK("WRITE_IDLE_TIMEOUT", 2*time.Minute); err != nil {
+		errs = append(errs, err)
+	}
+	if cfg.Coalesce, err = envBool("COALESCE", true); err != nil {
 		errs = append(errs, err)
 	}
 

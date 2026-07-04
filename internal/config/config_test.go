@@ -16,6 +16,7 @@ func clearEnv(t *testing.T) {
 		"S3_KEY_PREFIX", "LISTEN_ADDR", "CACHE_CONTROL",
 		"NOT_FOUND_CACHE_CONTROL", "PROXY_AUTH_SECRET", "PROXY_AUTH_HEADER",
 		"LOG_LEVEL", "LOG_REQUESTS", "SHUTDOWN_TIMEOUT", "WRITE_IDLE_TIMEOUT",
+		"METRICS_ADDR", "COALESCE",
 	} {
 		t.Setenv(name, "")
 	}
@@ -53,6 +54,26 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.WriteIdleTimeout != 2*time.Minute {
 		t.Errorf("WriteIdleTimeout = %v, want 2m", cfg.WriteIdleTimeout)
 	}
+	if !cfg.Coalesce {
+		t.Error("Coalesce should default to true")
+	}
+	if cfg.MetricsAddr != "" {
+		t.Errorf("MetricsAddr = %q, want empty", cfg.MetricsAddr)
+	}
+}
+
+func TestCoalesceDisable(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("S3_BUCKET", "demo")
+	t.Setenv("COALESCE", "false")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if cfg.Coalesce {
+		t.Error("Coalesce should be false when COALESCE=false")
+	}
 }
 
 func TestWriteIdleTimeoutZeroDisables(t *testing.T) {
@@ -85,6 +106,8 @@ func TestFromEnvExplicitValues(t *testing.T) {
 	t.Setenv("LOG_REQUESTS", "1")
 	t.Setenv("SHUTDOWN_TIMEOUT", "30s")
 	t.Setenv("WRITE_IDLE_TIMEOUT", "45s")
+	t.Setenv("METRICS_ADDR", ":9090")
+	t.Setenv("COALESCE", "false")
 
 	cfg, err := FromEnv()
 	if err != nil {
@@ -96,7 +119,8 @@ func TestFromEnvExplicitValues(t *testing.T) {
 		cfg.NotFoundCacheControl != "public, max-age=60" || cfg.AuthSecret != "s3cret" ||
 		cfg.AuthHeader != "X-Custom-Auth" || cfg.LogLevel != slog.LevelDebug ||
 		!cfg.LogRequests || cfg.ShutdownTimeout != 30*time.Second ||
-		cfg.WriteIdleTimeout != 45*time.Second {
+		cfg.WriteIdleTimeout != 45*time.Second || cfg.MetricsAddr != ":9090" ||
+		cfg.Coalesce {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
 }
