@@ -34,6 +34,7 @@ type Handler struct {
 	bucket       string
 	keyPrefix    string
 	cacheControl string
+	notFoundCC   string
 	authHeader   string
 	authSecret   []byte // sha256 of the secret; nil when auth is disabled
 	logRequests  bool
@@ -46,6 +47,7 @@ func New(store ObjectStore, cfg config.Config, logger *slog.Logger) *Handler {
 		bucket:       cfg.Bucket,
 		keyPrefix:    cfg.KeyPrefix,
 		cacheControl: cfg.CacheControl,
+		notFoundCC:   cfg.NotFoundCacheControl,
 		authHeader:   cfg.AuthHeader,
 		logRequests:  cfg.LogRequests,
 		logger:       logger,
@@ -252,14 +254,19 @@ var errorBodies = map[int]string{
 
 // fail writes a fixed generic error response. Bodies never contain
 // upstream error text, request IDs or bucket names, and no-store keeps
-// errors out of the CDN cache.
+// errors out of the CDN cache — except 404, which may opt into brief
+// negative caching via NOT_FOUND_CACHE_CONTROL.
 func (h *Handler) fail(w http.ResponseWriter, status int) (int, int64) {
 	body, ok := errorBodies[status]
 	if !ok {
 		body = strings.ToLower(http.StatusText(status)) + "\n"
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	if status == http.StatusNotFound && h.notFoundCC != "" {
+		w.Header().Set("Cache-Control", h.notFoundCC)
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	w.WriteHeader(status)
 	n, _ := io.WriteString(w, body)
 	return status, int64(n)

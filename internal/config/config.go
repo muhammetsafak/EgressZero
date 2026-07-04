@@ -31,6 +31,10 @@ type Config struct {
 	// CacheControl, when non-empty, replaces the upstream Cache-Control
 	// header on 200/206/304 responses.
 	CacheControl string
+	// NotFoundCacheControl, when non-empty, is set as Cache-Control on
+	// 404 responses so the CDN can absorb repeat lookups for missing
+	// keys. All other errors stay no-store.
+	NotFoundCacheControl string
 	// AuthSecret enables the CDN-only protection when non-empty:
 	// requests must carry the secret in the AuthHeader header.
 	AuthSecret string
@@ -51,14 +55,15 @@ func FromEnv() (Config, error) {
 	var errs []error
 
 	cfg := Config{
-		Bucket:       os.Getenv("S3_BUCKET"),
-		Region:       os.Getenv("AWS_REGION"),
-		Endpoint:     os.Getenv("S3_ENDPOINT"),
-		KeyPrefix:    os.Getenv("S3_KEY_PREFIX"),
-		ListenAddr:   envDefault("LISTEN_ADDR", ":8080"),
-		CacheControl: os.Getenv("CACHE_CONTROL"),
-		AuthSecret:   os.Getenv("PROXY_AUTH_SECRET"),
-		AuthHeader:   envDefault("PROXY_AUTH_HEADER", "X-Proxy-Auth"),
+		Bucket:               os.Getenv("S3_BUCKET"),
+		Region:               os.Getenv("AWS_REGION"),
+		Endpoint:             os.Getenv("S3_ENDPOINT"),
+		KeyPrefix:            os.Getenv("S3_KEY_PREFIX"),
+		ListenAddr:           envDefault("LISTEN_ADDR", ":8080"),
+		CacheControl:         os.Getenv("CACHE_CONTROL"),
+		NotFoundCacheControl: os.Getenv("NOT_FOUND_CACHE_CONTROL"),
+		AuthSecret:           os.Getenv("PROXY_AUTH_SECRET"),
+		AuthHeader:           envDefault("PROXY_AUTH_HEADER", "X-Proxy-Auth"),
 	}
 
 	if cfg.Bucket == "" {

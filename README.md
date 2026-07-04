@@ -59,6 +59,7 @@ go install github.com/muhammetsafak/egresszero/cmd/egresszero@latest
 | `S3_KEY_PREFIX` | no | `""` | Prepended verbatim to every object key (include the trailing `/` yourself) |
 | `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
 | `CACHE_CONTROL` | no | pass upstream through | Replaces `Cache-Control` on 200/206/304 responses |
+| `NOT_FOUND_CACHE_CONTROL` | no | `no-store` | `Cache-Control` for 404 responses (e.g. `public, max-age=60`) so the edge absorbs repeat lookups of missing keys. Beware: newly uploaded objects stay invisible for up to that TTL. Other errors are always `no-store` |
 | `PROXY_AUTH_SECRET` | no | disabled | Enables CDN-only protection (see below) |
 | `PROXY_AUTH_HEADER` | no | `X-Proxy-Auth` | Header carrying the secret |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error` |
@@ -100,7 +101,7 @@ The bundled `docker-compose.yml` starts MinIO, seeds a `demo` bucket and runs th
 
 ## Behavior details
 
-- **Status mapping**: missing key → `404`, access denied → `403`, unsatisfiable range → `416`, precondition failed → `412`, upstream failure → `502`, upstream timeout → `504`, non-GET/HEAD → `405`. Error bodies are generic fixed strings with `Cache-Control: no-store`.
+- **Status mapping**: missing key → `404`, access denied → `403`, unsatisfiable range → `416`, precondition failed → `412`, upstream failure → `502`, upstream timeout → `504`, non-GET/HEAD → `405`. Error bodies are generic fixed strings with `Cache-Control: no-store` (404 can opt into negative caching via `NOT_FOUND_CACHE_CONTROL`).
 - **Keys**: the URL path is percent-decoded and used as the object key (leading `/` stripped, `S3_KEY_PREFIX` prepended). Paths containing `.` / `..` segments are rejected with `400`; embedded `//` in keys is preserved.
 - **Headers forwarded**: `Content-Type`, `Content-Length`, `ETag`, `Last-Modified`, `Cache-Control`, `Content-Encoding`, `Content-Disposition`, `Content-Language`, `Expires`, `Content-Range`, plus `Accept-Ranges: bytes`. Nothing else (no `x-amz-*`, SSE or version headers).
 - **Memory**: for a strict RSS ceiling in production set [`GOMEMLIMIT`](https://pkg.go.dev/runtime/debug#SetMemoryLimit) (e.g. `GOMEMLIMIT=40MiB`); the Go runtime then keeps heap churn under that bound at slightly higher GC cost.

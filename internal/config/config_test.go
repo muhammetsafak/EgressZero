@@ -14,7 +14,7 @@ func clearEnv(t *testing.T) {
 	for _, name := range []string{
 		"S3_BUCKET", "AWS_REGION", "S3_ENDPOINT", "S3_FORCE_PATH_STYLE",
 		"S3_KEY_PREFIX", "LISTEN_ADDR", "CACHE_CONTROL",
-		"PROXY_AUTH_SECRET", "PROXY_AUTH_HEADER",
+		"NOT_FOUND_CACHE_CONTROL", "PROXY_AUTH_SECRET", "PROXY_AUTH_HEADER",
 		"LOG_LEVEL", "LOG_REQUESTS", "SHUTDOWN_TIMEOUT",
 	} {
 		t.Setenv(name, "")
@@ -61,6 +61,7 @@ func TestFromEnvExplicitValues(t *testing.T) {
 	t.Setenv("S3_KEY_PREFIX", "public/")
 	t.Setenv("LISTEN_ADDR", ":9999")
 	t.Setenv("CACHE_CONTROL", "public, max-age=31536000")
+	t.Setenv("NOT_FOUND_CACHE_CONTROL", "public, max-age=60")
 	t.Setenv("PROXY_AUTH_SECRET", "s3cret")
 	t.Setenv("PROXY_AUTH_HEADER", "X-Custom-Auth")
 	t.Setenv("LOG_LEVEL", "debug")
@@ -73,7 +74,8 @@ func TestFromEnvExplicitValues(t *testing.T) {
 	}
 	if cfg.Region != "eu-central-1" || cfg.Endpoint != "https://minio.example.com:9000" ||
 		!cfg.ForcePathStyle || cfg.KeyPrefix != "public/" || cfg.ListenAddr != ":9999" ||
-		cfg.CacheControl != "public, max-age=31536000" || cfg.AuthSecret != "s3cret" ||
+		cfg.CacheControl != "public, max-age=31536000" ||
+		cfg.NotFoundCacheControl != "public, max-age=60" || cfg.AuthSecret != "s3cret" ||
 		cfg.AuthHeader != "X-Custom-Auth" || cfg.LogLevel != slog.LevelDebug ||
 		!cfg.LogRequests || cfg.ShutdownTimeout != 30*time.Second {
 		t.Errorf("unexpected config: %+v", cfg)

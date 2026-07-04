@@ -267,6 +267,61 @@ func TestErrorMapping(t *testing.T) {
 	}
 }
 
+func TestNotFoundNegativeCaching(t *testing.T) {
+	withNegCache := func(c *config.Config) { c.NotFoundCacheControl = "public, max-age=60" }
+
+	t.Run("404 carries configured Cache-Control", func(t *testing.T) {
+		h := testHandler(&fakeStore{getErr: sdkAPIErr("GetObject", "NoSuchKey")}, withNegCache)
+		w := doGet(h, "/missing", nil)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", w.Code)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "public, max-age=60" {
+			t.Errorf("Cache-Control = %q, want configured value", got)
+		}
+	})
+	t.Run("root 404 also carries it", func(t *testing.T) {
+		h := testHandler(&fakeStore{}, withNegCache)
+		w := doGet(h, "/", nil)
+		if got := w.Header().Get("Cache-Control"); got != "public, max-age=60" {
+			t.Errorf("Cache-Control = %q, want configured value", got)
+		}
+	})
+	t.Run("other errors stay no-store", func(t *testing.T) {
+		for name, err := range map[string]error{
+			"403": sdkAPIErr("GetObject", "AccessDenied"),
+			"416": sdkAPIErr("GetObject", "InvalidRange"),
+			"502": errors.New("upstream exploded"),
+		} {
+			h := testHandler(&fakeStore{getErr: err}, withNegCache)
+			w := doGet(h, "/a", nil)
+			if got := w.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("%s: Cache-Control = %q, want no-store", name, got)
+			}
+		}
+	})
+	t.Run("auth failure stays no-store", func(t *testing.T) {
+		h := testHandler(&fakeStore{}, func(c *config.Config) {
+			withNegCache(c)
+			c.AuthSecret = "hunter2"
+		})
+		w := doGet(h, "/a", nil)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", w.Code)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store", got)
+		}
+	})
+	t.Run("disabled by default", func(t *testing.T) {
+		h := testHandler(&fakeStore{getErr: sdkAPIErr("GetObject", "NoSuchKey")}, nil)
+		w := doGet(h, "/missing", nil)
+		if got := w.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store", got)
+		}
+	})
+}
+
 func TestMethodNotAllowed(t *testing.T) {
 	h := testHandler(&fakeStore{}, nil)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodPatch} {
