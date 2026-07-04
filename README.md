@@ -25,6 +25,7 @@ The proxy streams objects straight from S3 to the client — bodies are never bu
 - **Cache-Control injection** — override the upstream `Cache-Control` with `CACHE_CONTROL`
 - **CDN-only protection** — optional shared-secret header check so nobody bypasses the CDN and re-bills your egress
 - **No leaks** — S3 error details, request IDs and bucket names never reach clients; error responses are `no-store`
+- **Optional Prometheus metrics** — request/duration/bytes, in-flight gauge, S3 first-byte latency and upstream errors, on a separate listener so `/metrics` stays off the CDN
 - **Single static binary** — distroless Docker image, configured entirely by environment variables
 
 ## Quickstart
@@ -58,6 +59,7 @@ go install github.com/muhammetsafak/egresszero/cmd/egresszero@latest
 | `S3_FORCE_PATH_STYLE` | no | `false` | Path-style addressing (`true` for MinIO) |
 | `S3_KEY_PREFIX` | no | `""` | Prepended verbatim to every object key (include the trailing `/` yourself) |
 | `LISTEN_ADDR` | no | `:8080` | HTTP listen address |
+| `METRICS_ADDR` | no | disabled | Bind a **separate** listener serving Prometheus metrics at `/metrics` (e.g. `:9090`). Kept off the main listener so it is never reachable through the CDN. Empty disables metrics |
 | `CACHE_CONTROL` | no | pass upstream through | Replaces `Cache-Control` on 200/206/304 responses |
 | `NOT_FOUND_CACHE_CONTROL` | no | `no-store` | `Cache-Control` for 404 responses (e.g. `public, max-age=60`) so the edge absorbs repeat lookups of missing keys. Beware: newly uploaded objects stay invisible for up to that TTL. Other errors are always `no-store` |
 | `PROXY_AUTH_SECRET` | no | disabled | Enables CDN-only protection (see below) |
@@ -114,6 +116,21 @@ The bundled `docker-compose.yml` starts MinIO, seeds a `demo` bucket and runs th
 - `Range` is not forwarded on `HEAD` requests.
 - Query strings are ignored entirely.
 
+## Metrics
+
+Set `METRICS_ADDR` (e.g. `:9090`) to expose Prometheus metrics at `/metrics` on a dedicated listener — keep that port private (bind it to an internal interface or firewall it), never proxy it through Cloudflare. Exposed series:
+
+| Metric | Type | Labels |
+|---|---|---|
+| `egresszero_requests_total` | counter | `method`, `status` |
+| `egresszero_request_duration_seconds` | histogram | `method` |
+| `egresszero_response_bytes_total` | counter | — |
+| `egresszero_in_flight_requests` | gauge | — |
+| `egresszero_upstream_request_duration_seconds` | histogram | — (S3 time to first byte) |
+| `egresszero_upstream_errors_total` | counter | `status` (4xx/5xx and 499) |
+
+Standard Go runtime and process collectors (`go_*`, `process_*`) are included. Health probes to `/healthz` are excluded from request metrics.
+
 ## Development
 
 ```sh
@@ -128,7 +145,6 @@ make compose-up  # MinIO + proxy end-to-end stack
 
 ## Future work
 
-- Prometheus metrics (deliberately left out of the MVP)
 - Request coalescing (`singleflight`) for cold-cache stampedes
 
 ## License

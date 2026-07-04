@@ -25,7 +25,7 @@ func testHandler(store ObjectStore, mutate func(*config.Config)) *Handler {
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	return New(store, cfg, slog.New(slog.DiscardHandler))
+	return New(store, cfg, slog.New(slog.DiscardHandler), nil)
 }
 
 func doGet(h *Handler, target string, header http.Header) *httptest.ResponseRecorder {

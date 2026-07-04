@@ -40,9 +40,15 @@ type Handler struct {
 	writeIdleTimeout time.Duration
 	logRequests      bool
 	logger           *slog.Logger
+	metrics          Recorder
 }
 
-func New(store ObjectStore, cfg config.Config, logger *slog.Logger) *Handler {
+// New builds the handler. A nil Recorder disables instrumentation with
+// zero hot-path overhead.
+func New(store ObjectStore, cfg config.Config, logger *slog.Logger, rec Recorder) *Handler {
+	if rec == nil {
+		rec = nopRecorder{}
+	}
 	h := &Handler{
 		store:            store,
 		bucket:           cfg.Bucket,
@@ -53,6 +59,7 @@ func New(store ObjectStore, cfg config.Config, logger *slog.Logger) *Handler {
 		writeIdleTimeout: cfg.WriteIdleTimeout,
 		logRequests:      cfg.LogRequests,
 		logger:           logger,
+		metrics:          rec,
 	}
 	if cfg.AuthSecret != "" {
 		sum := sha256.Sum256([]byte(cfg.AuthSecret))
@@ -63,14 +70,24 @@ func New(store ObjectStore, cfg config.Config, logger *slog.Logger) *Handler {
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	h.metrics.IncInFlight()
+	defer h.metrics.DecInFlight()
+
 	status, written := h.serve(w, r)
+	dur := time.Since(start)
+
+	// Health probes fire constantly and would drown out real traffic in
+	// the request metrics; count everything else.
+	if r.URL.Path != "/healthz" {
+		h.metrics.ObserveRequest(r.Method, status, written, dur.Seconds())
+	}
 	if h.logRequests {
 		h.logger.LogAttrs(r.Context(), slog.LevelInfo, "request",
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),
 			slog.Int("status", status),
 			slog.Int64("bytes", written),
-			slog.Duration("duration", time.Since(start)),
+			slog.Duration("duration", dur),
 		)
 	}
 }
@@ -181,7 +198,9 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, 
 		}
 	}
 
+	upstreamStart := time.Now()
 	out, err := h.store.GetObject(r.Context(), in)
+	h.metrics.ObserveUpstreamLatency(time.Since(upstreamStart).Seconds())
 	if err != nil {
 		// IfMatch/IfUnmodifiedSince are only ever set for If-Range, so a
 		// 412 here means the validator no longer matches: drop the range
@@ -273,7 +292,9 @@ func (h *Handler) head(w http.ResponseWriter, r *http.Request, key string) (int,
 		}
 	}
 
+	upstreamStart := time.Now()
 	out, err := h.store.HeadObject(r.Context(), in)
+	h.metrics.ObserveUpstreamLatency(time.Since(upstreamStart).Seconds())
 	if err != nil {
 		return h.writeError(w, r, err), 0
 	}
@@ -289,6 +310,12 @@ func (h *Handler) head(w http.ResponseWriter, r *http.Request, key string) (int,
 // the status for logging.
 func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) int {
 	status, upstream := s3client.Classify(err)
+	// 304 is a successful conditional response, not an error; everything
+	// else that reaches here (4xx/5xx, plus 499 client-closed) is a
+	// non-success upstream outcome worth counting.
+	if status != http.StatusNotModified {
+		h.metrics.IncUpstreamError(status)
+	}
 	switch status {
 	case s3client.StatusClientClosedRequest:
 		// Client is gone; there is nobody to write to.

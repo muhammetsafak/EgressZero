@@ -16,7 +16,7 @@ make compose-up  # MinIO + proxy end-to-end stack on :8080
 
 ## Pull requests
 
-- Keep the dependency footprint as is: standard library + `aws-sdk-go-v2` only.
+- Keep the dependency footprint small: standard library, `aws-sdk-go-v2`, and `prometheus/client_golang` (metrics only). New third-party dependencies need a good reason.
 - Run `gofmt`, `make lint` and `make test-race` before pushing — CI enforces all three.
 - Behavior changes need a test in the handler matrix (`internal/proxy/proxy_test.go`).
 - Anything that touches the streaming path must keep `BenchmarkGET` allocations flat and `TestMemoryCeiling` green.

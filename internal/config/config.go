@@ -28,6 +28,11 @@ type Config struct {
 	KeyPrefix string
 	// ListenAddr is the address the HTTP server binds to.
 	ListenAddr string
+	// MetricsAddr, when non-empty, binds a separate HTTP listener that
+	// serves Prometheus metrics at /metrics. It is intentionally kept
+	// off the main listener so the endpoint is never reachable through
+	// the CDN. Empty disables metrics entirely.
+	MetricsAddr string
 	// CacheControl, when non-empty, replaces the upstream Cache-Control
 	// header on 200/206/304 responses.
 	CacheControl string
@@ -65,6 +70,7 @@ func FromEnv() (Config, error) {
 		Endpoint:             os.Getenv("S3_ENDPOINT"),
 		KeyPrefix:            os.Getenv("S3_KEY_PREFIX"),
 		ListenAddr:           envDefault("LISTEN_ADDR", ":8080"),
+		MetricsAddr:          os.Getenv("METRICS_ADDR"),
 		CacheControl:         os.Getenv("CACHE_CONTROL"),
 		NotFoundCacheControl: os.Getenv("NOT_FOUND_CACHE_CONTROL"),
 		AuthSecret:           os.Getenv("PROXY_AUTH_SECRET"),

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/muhammetsafak/egresszero/internal/config"
+	"github.com/muhammetsafak/egresszero/internal/metrics"
 	"github.com/muhammetsafak/egresszero/internal/proxy"
 	"github.com/muhammetsafak/egresszero/internal/s3client"
 	"github.com/muhammetsafak/egresszero/internal/version"
@@ -52,9 +53,25 @@ func run() error {
 		return err
 	}
 
+	// Metrics are opt-in and served on their own listener so /metrics is
+	// never reachable through the CDN host. rec stays a nil Recorder
+	// (zero overhead) when METRICS_ADDR is unset.
+	var rec proxy.Recorder
+	var metricsSrv *http.Server
+	if cfg.MetricsAddr != "" {
+		m := metrics.New()
+		rec = m
+		metricsSrv = &http.Server{
+			Addr:              cfg.MetricsAddr,
+			Handler:           metricsMux(m.Handler()),
+			ReadHeaderTimeout: 10 * time.Second,
+			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		}
+	}
+
 	srv := &http.Server{
 		Addr:    cfg.ListenAddr,
-		Handler: proxy.New(store, cfg, logger),
+		Handler: proxy.New(store, cfg, logger, rec),
 		// WriteTimeout stays 0 on purpose: any fixed value hard-kills
 		// large downloads to slow clients. Stalled clients are handled
 		// by the proxy's rolling per-write deadline instead
@@ -77,6 +94,7 @@ func run() error {
 		slog.Bool("path_style", cfg.ForcePathStyle),
 		slog.Bool("auth_enabled", cfg.AuthSecret != ""),
 		slog.Duration("write_idle_timeout", cfg.WriteIdleTimeout),
+		slog.String("metrics_addr", cfg.MetricsAddr),
 	)
 
 	errCh := make(chan error, 1)
@@ -85,6 +103,13 @@ func run() error {
 			errCh <- err
 		}
 	}()
+	if metricsSrv != nil {
+		go func() {
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- err
+			}
+		}()
+	}
 
 	select {
 	case err := <-errCh:
@@ -95,6 +120,9 @@ func run() error {
 	logger.Info("shutting down", slog.Duration("timeout", cfg.ShutdownTimeout))
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
+	if metricsSrv != nil {
+		_ = metricsSrv.Shutdown(shutdownCtx)
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		// Streams still running after the drain window are cut; the
 		// CDN retries.
@@ -102,4 +130,16 @@ func run() error {
 		return srv.Close()
 	}
 	return nil
+}
+
+// metricsMux serves the Prometheus handler at /metrics and a health
+// probe at /healthz; everything else 404s.
+func metricsMux(h http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", h)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	return mux
 }
