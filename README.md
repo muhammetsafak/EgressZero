@@ -65,6 +65,7 @@ go install github.com/muhammetsafak/egresszero/cmd/egresszero@latest
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error` |
 | `LOG_REQUESTS` | no | `false` | One structured JSON log line per request |
 | `SHUTDOWN_TIMEOUT` | no | `15s` | Graceful-shutdown drain window |
+| `WRITE_IDLE_TIMEOUT` | no | `2m` | Disconnect a client that has not accepted any body bytes for this long (rolling deadline; slow-but-alive clients are unaffected). `0` disables |
 
 Startup fails fast and reports **all** configuration errors at once.
 
@@ -105,6 +106,7 @@ The bundled `docker-compose.yml` starts MinIO, seeds a `demo` bucket and runs th
 - **Keys**: the URL path is percent-decoded and used as the object key (leading `/` stripped, `S3_KEY_PREFIX` prepended). Paths containing `.` / `..` segments are rejected with `400`; embedded `//` in keys is preserved.
 - **Headers forwarded**: `Content-Type`, `Content-Length`, `ETag`, `Last-Modified`, `Cache-Control`, `Content-Encoding`, `Content-Disposition`, `Content-Language`, `Expires`, `Content-Range`, plus `Accept-Ranges: bytes`. Nothing else (no `x-amz-*`, SSE or version headers).
 - **Memory**: for a strict RSS ceiling in production set [`GOMEMLIMIT`](https://pkg.go.dev/runtime/debug#SetMemoryLimit) (e.g. `GOMEMLIMIT=40MiB`); the Go runtime then keeps heap churn under that bound at slightly higher GC cost.
+- **Stalled clients**: the server's `WriteTimeout` is deliberately 0 (a fixed value would kill long downloads); instead, a rolling per-write deadline (`WRITE_IDLE_TIMEOUT`, default 2m) disconnects clients that stop accepting bytes while leaving slow-but-active downloads untouched.
 
 ## Limitations (by design, documented)
 
@@ -129,7 +131,6 @@ make compose-up  # MinIO + proxy end-to-end stack
 
 - Prometheus metrics (deliberately left out of the MVP)
 - Request coalescing (`singleflight`) for cold-cache stampedes
-- Rolling per-write deadlines via `http.NewResponseController` as an alternative to `WriteTimeout: 0`
 
 ## License
 

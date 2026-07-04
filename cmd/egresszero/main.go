@@ -56,9 +56,10 @@ func run() error {
 		Addr:    cfg.ListenAddr,
 		Handler: proxy.New(store, cfg, logger),
 		// WriteTimeout stays 0 on purpose: any fixed value hard-kills
-		// large downloads to slow clients. Slow-loris exposure is
-		// bounded by ReadHeaderTimeout/IdleTimeout and by the CDN
-		// being the only expected client.
+		// large downloads to slow clients. Stalled clients are handled
+		// by the proxy's rolling per-write deadline instead
+		// (WRITE_IDLE_TIMEOUT); ReadHeaderTimeout/IdleTimeout bound the
+		// rest.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      0,
@@ -75,6 +76,7 @@ func run() error {
 		slog.String("cache_control", cfg.CacheControl),
 		slog.Bool("path_style", cfg.ForcePathStyle),
 		slog.Bool("auth_enabled", cfg.AuthSecret != ""),
+		slog.Duration("write_idle_timeout", cfg.WriteIdleTimeout),
 	)
 
 	errCh := make(chan error, 1)

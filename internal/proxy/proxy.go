@@ -30,27 +30,29 @@ type ObjectStore interface {
 // Handler serves GET/HEAD requests by streaming objects from an
 // ObjectStore. It implements http.Handler.
 type Handler struct {
-	store        ObjectStore
-	bucket       string
-	keyPrefix    string
-	cacheControl string
-	notFoundCC   string
-	authHeader   string
-	authSecret   []byte // sha256 of the secret; nil when auth is disabled
-	logRequests  bool
-	logger       *slog.Logger
+	store            ObjectStore
+	bucket           string
+	keyPrefix        string
+	cacheControl     string
+	notFoundCC       string
+	authHeader       string
+	authSecret       []byte // sha256 of the secret; nil when auth is disabled
+	writeIdleTimeout time.Duration
+	logRequests      bool
+	logger           *slog.Logger
 }
 
 func New(store ObjectStore, cfg config.Config, logger *slog.Logger) *Handler {
 	h := &Handler{
-		store:        store,
-		bucket:       cfg.Bucket,
-		keyPrefix:    cfg.KeyPrefix,
-		cacheControl: cfg.CacheControl,
-		notFoundCC:   cfg.NotFoundCacheControl,
-		authHeader:   cfg.AuthHeader,
-		logRequests:  cfg.LogRequests,
-		logger:       logger,
+		store:            store,
+		bucket:           cfg.Bucket,
+		keyPrefix:        cfg.KeyPrefix,
+		cacheControl:     cfg.CacheControl,
+		notFoundCC:       cfg.NotFoundCacheControl,
+		authHeader:       cfg.AuthHeader,
+		writeIdleTimeout: cfg.WriteIdleTimeout,
+		logRequests:      cfg.LogRequests,
+		logger:           logger,
 	}
 	if cfg.AuthSecret != "" {
 		sum := sha256.Sum256([]byte(cfg.AuthSecret))
@@ -165,10 +167,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, 
 	}
 	w.WriteHeader(status)
 
-	// Plain io.Copy: the ResponseWriter implements io.ReaderFrom, so
-	// net/http streams with its own bounded buffers and a custom
-	// buffer pool would be bypassed anyway.
-	n, err := io.Copy(w, out.Body)
+	n, err := h.copyBody(w, out.Body)
 	if err != nil {
 		// Status is already on the wire; the client went away or S3
 		// died mid-body. Nothing to send, just record it.
@@ -176,6 +175,46 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, 
 			slog.String("path", r.URL.Path), slog.Int64("bytes", n), slog.Any("error", err))
 	}
 	return status, n
+}
+
+// copyBody streams body to w with a plain io.Copy: the ResponseWriter
+// implements io.ReaderFrom, so net/http streams with its own bounded
+// buffers and a custom buffer pool would be bypassed anyway.
+//
+// When writeIdleTimeout > 0 the body is wrapped so that every read
+// refreshes a rolling write deadline on the connection: a client that
+// stops accepting bytes is disconnected after the idle window, while a
+// slow-but-alive client keeps the stream open indefinitely. The wrapper
+// is a plain io.Reader, so the ReaderFrom fast path is preserved.
+func (h *Handler) copyBody(w http.ResponseWriter, body io.Reader) (int64, error) {
+	if h.writeIdleTimeout <= 0 {
+		return io.Copy(w, body)
+	}
+	rc := http.NewResponseController(w)
+	// Reset before the connection is reused for the next request; a
+	// leftover deadline would eventually poison keep-alive responses
+	// that do not refresh it (errors, healthz).
+	defer rc.SetWriteDeadline(time.Time{})
+	return io.Copy(w, &deadlineRefresher{body: body, rc: rc, timeout: h.writeIdleTimeout})
+}
+
+// deadlineRefresher pushes the connection's write deadline forward on
+// every read. Reads only happen while writes make progress, so a
+// stalled client stops the reads and the last deadline fires.
+type deadlineRefresher struct {
+	body        io.Reader
+	rc          *http.ResponseController
+	timeout     time.Duration
+	unsupported bool // writer without deadline support (e.g. test recorders)
+}
+
+func (d *deadlineRefresher) Read(p []byte) (int, error) {
+	if !d.unsupported {
+		if err := d.rc.SetWriteDeadline(time.Now().Add(d.timeout)); err != nil {
+			d.unsupported = true
+		}
+	}
+	return d.body.Read(p)
 }
 
 func (h *Handler) head(w http.ResponseWriter, r *http.Request, key string) (int, int64) {

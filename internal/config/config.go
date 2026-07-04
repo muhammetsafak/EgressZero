@@ -46,6 +46,11 @@ type Config struct {
 	LogRequests bool
 	// ShutdownTimeout bounds the graceful-shutdown drain.
 	ShutdownTimeout time.Duration
+	// WriteIdleTimeout disconnects a client that has not accepted any
+	// body bytes for this long. It is a rolling deadline refreshed as
+	// the stream progresses, so slow-but-alive clients are unaffected.
+	// Zero disables it.
+	WriteIdleTimeout time.Duration
 }
 
 // FromEnv builds a Config from environment variables. All validation
@@ -90,6 +95,9 @@ func FromEnv() (Config, error) {
 	if cfg.ShutdownTimeout, err = envDuration("SHUTDOWN_TIMEOUT", 15*time.Second); err != nil {
 		errs = append(errs, err)
 	}
+	if cfg.WriteIdleTimeout, err = envDurationZeroOK("WRITE_IDLE_TIMEOUT", 2*time.Minute); err != nil {
+		errs = append(errs, err)
+	}
 
 	return cfg, errors.Join(errs...)
 }
@@ -121,6 +129,19 @@ func envDuration(name string, def time.Duration) (time.Duration, error) {
 	d, err := time.ParseDuration(v)
 	if err != nil || d <= 0 {
 		return def, fmt.Errorf("%s %q is not a valid positive duration", name, v)
+	}
+	return d, nil
+}
+
+// envDurationZeroOK is envDuration but accepts "0" (= feature disabled).
+func envDurationZeroOK(name string, def time.Duration) (time.Duration, error) {
+	v := os.Getenv(name)
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return def, fmt.Errorf("%s %q is not a valid non-negative duration", name, v)
 	}
 	return d, nil
 }

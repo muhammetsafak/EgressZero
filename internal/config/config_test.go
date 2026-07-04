@@ -15,7 +15,7 @@ func clearEnv(t *testing.T) {
 		"S3_BUCKET", "AWS_REGION", "S3_ENDPOINT", "S3_FORCE_PATH_STYLE",
 		"S3_KEY_PREFIX", "LISTEN_ADDR", "CACHE_CONTROL",
 		"NOT_FOUND_CACHE_CONTROL", "PROXY_AUTH_SECRET", "PROXY_AUTH_HEADER",
-		"LOG_LEVEL", "LOG_REQUESTS", "SHUTDOWN_TIMEOUT",
+		"LOG_LEVEL", "LOG_REQUESTS", "SHUTDOWN_TIMEOUT", "WRITE_IDLE_TIMEOUT",
 	} {
 		t.Setenv(name, "")
 	}
@@ -50,6 +50,23 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.ShutdownTimeout != 15*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want 15s", cfg.ShutdownTimeout)
 	}
+	if cfg.WriteIdleTimeout != 2*time.Minute {
+		t.Errorf("WriteIdleTimeout = %v, want 2m", cfg.WriteIdleTimeout)
+	}
+}
+
+func TestWriteIdleTimeoutZeroDisables(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("S3_BUCKET", "demo")
+	t.Setenv("WRITE_IDLE_TIMEOUT", "0")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if cfg.WriteIdleTimeout != 0 {
+		t.Errorf("WriteIdleTimeout = %v, want 0 (disabled)", cfg.WriteIdleTimeout)
+	}
 }
 
 func TestFromEnvExplicitValues(t *testing.T) {
@@ -67,6 +84,7 @@ func TestFromEnvExplicitValues(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("LOG_REQUESTS", "1")
 	t.Setenv("SHUTDOWN_TIMEOUT", "30s")
+	t.Setenv("WRITE_IDLE_TIMEOUT", "45s")
 
 	cfg, err := FromEnv()
 	if err != nil {
@@ -77,7 +95,8 @@ func TestFromEnvExplicitValues(t *testing.T) {
 		cfg.CacheControl != "public, max-age=31536000" ||
 		cfg.NotFoundCacheControl != "public, max-age=60" || cfg.AuthSecret != "s3cret" ||
 		cfg.AuthHeader != "X-Custom-Auth" || cfg.LogLevel != slog.LevelDebug ||
-		!cfg.LogRequests || cfg.ShutdownTimeout != 30*time.Second {
+		!cfg.LogRequests || cfg.ShutdownTimeout != 30*time.Second ||
+		cfg.WriteIdleTimeout != 45*time.Second {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
 }
@@ -103,6 +122,8 @@ func TestFromEnvInvalidValues(t *testing.T) {
 		{"bad log level", "LOG_LEVEL", "loud"},
 		{"bad duration", "SHUTDOWN_TIMEOUT", "fast"},
 		{"negative duration", "SHUTDOWN_TIMEOUT", "-5s"},
+		{"bad write idle timeout", "WRITE_IDLE_TIMEOUT", "slow"},
+		{"negative write idle timeout", "WRITE_IDLE_TIMEOUT", "-1m"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
