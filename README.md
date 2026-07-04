@@ -107,7 +107,7 @@ The bundled `docker-compose.yml` starts MinIO, seeds a `demo` bucket and runs th
 - **Status mapping**: missing key → `404`, access denied → `403`, unsatisfiable range → `416`, precondition failed → `412`, upstream failure → `502`, upstream timeout → `504`, non-GET/HEAD → `405`. Error bodies are generic fixed strings with `Cache-Control: no-store` (404 can opt into negative caching via `NOT_FOUND_CACHE_CONTROL`).
 - **Keys**: the URL path is percent-decoded and used as the object key (leading `/` stripped, `S3_KEY_PREFIX` prepended). Paths containing `.` / `..` segments are rejected with `400`; embedded `//` in keys is preserved.
 - **Headers forwarded**: `Content-Type`, `Content-Length`, `ETag`, `Last-Modified`, `Cache-Control`, `Content-Encoding`, `Content-Disposition`, `Content-Language`, `Expires`, `Content-Range`, plus `Accept-Ranges: bytes`. Nothing else (no `x-amz-*`, SSE or version headers).
-- **Memory**: for a strict RSS ceiling in production set [`GOMEMLIMIT`](https://pkg.go.dev/runtime/debug#SetMemoryLimit) (e.g. `GOMEMLIMIT=40MiB`); the Go runtime then keeps heap churn under that bound at slightly higher GC cost.
+- **Memory**: per-request cost is flat (a 1 GB download costs the same as a 1 KB one), but total RSS scales with the number of *simultaneously active* streams — roughly 150–260 KB each at high concurrency. Budget on real simultaneity, not peak request count. `GOMEMLIMIT` trims the runtime's GC headroom (it cut RSS ~35% at 1000 concurrent in testing) but cannot go below the live working set. See [docs/loadtest.md](docs/loadtest.md) for the reproducible benchmark and measured numbers.
 - **Stalled clients**: the server's `WriteTimeout` is deliberately 0 (a fixed value would kill long downloads); instead, a rolling per-write deadline (`WRITE_IDLE_TIMEOUT`, default 2m) disconnects clients that stop accepting bytes while leaving slow-but-active downloads untouched.
 
 ## Limitations (by design, documented)
@@ -141,7 +141,7 @@ make lint        # go vet (+ staticcheck if installed)
 make compose-up  # MinIO + proxy end-to-end stack
 ```
 
-`go test ./internal/proxy/ -run TestMemoryCeiling` proves the streaming memory ceiling: 50 concurrent 256 MB downloads held mid-flight may not grow the heap by more than 20 MB.
+`go test ./internal/proxy/ -run TestMemoryCeiling` proves the streaming memory ceiling: 50 concurrent 256 MB downloads held mid-flight may not grow the heap by more than 20 MB. For a full end-to-end memory/concurrency benchmark (up to 1000 simultaneous streams against MinIO, with real RSS numbers), see [docs/loadtest.md](docs/loadtest.md) and `scripts/loadtest.sh`.
 
 ## Future work
 
