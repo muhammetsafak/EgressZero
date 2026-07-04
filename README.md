@@ -41,6 +41,12 @@ docker run -p 8080:8080 \
 
 `GET /path/to/object` maps to `s3://my-bucket/path/to/object`. Only `GET` and `HEAD` are served. `GET /healthz` is a dependency-free health probe (never touches S3, exempt from auth).
 
+No Docker? Prebuilt static binaries for Linux, macOS and Windows are attached to every [release](https://github.com/muhammetsafak/EgressZero/releases), or install from source:
+
+```sh
+go install github.com/muhammetsafak/egresszero/cmd/egresszero@latest
+```
+
 ## Configuration
 
 | Env var | Required | Default | Description |
