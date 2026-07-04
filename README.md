@@ -19,7 +19,7 @@ The proxy streams objects straight from S3 to the client — bodies are never bu
 
 - **True streaming** — constant memory per request regardless of object size; allocations per request are flat (verified by tests and benchmarks)
 - **Range requests** — `Range` is forwarded to S3, `206 Partial Content` with `Content-Range` comes back (video seeking, CDN chunked caching)
-- **Conditional requests** — `If-None-Match` / `If-Modified-Since` forwarded, clean `304 Not Modified` responses for cheap revalidation
+- **Conditional requests** — `If-None-Match` / `If-Modified-Since` forwarded, clean `304 Not Modified` responses for cheap revalidation; `If-Range` honored (serve the range only if the validator still matches, else the full body) for correct resumable downloads
 - **Private buckets** — SigV4 signing via the official `aws-sdk-go-v2` credential chain (env vars, shared config, IMDS/IRSA)
 - **S3-compatible endpoints** — Cloudflare R2, MinIO, Backblaze B2 via `S3_ENDPOINT`
 - **Cache-Control injection** — override the upstream `Cache-Control` with `CACHE_CONTROL`
@@ -110,7 +110,6 @@ The bundled `docker-compose.yml` starts MinIO, seeds a `demo` bucket and runs th
 
 ## Limitations (by design, documented)
 
-- `If-Range` is dropped (the S3 API has no equivalent); clients fall back to a full `200`. Cloudflare's internal chunking sends bare `Range` headers, so edge caching is unaffected.
 - Multi-range requests (`bytes=0-1,5-9`) are passed to S3, which RFC-correctly answers with the full `200` body.
 - `Range` is not forwarded on `HEAD` requests.
 - Query strings are ignored entirely.

@@ -136,12 +136,20 @@ func (h *Handler) deriveKey(path string) (key string, errStatus int) {
 	return h.keyPrefix + key, 0
 }
 
+// isETagValue reports whether v looks like an HTTP entity-tag (starts
+// with a double quote, or the "W/" weak-validator prefix) rather than an
+// HTTP-date, per RFC 9110's If-Range disambiguation rule.
+func isETagValue(v string) bool {
+	return strings.HasPrefix(v, `"`) || strings.HasPrefix(v, "W/")
+}
+
 func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, int64) {
 	in := &s3.GetObjectInput{
 		Bucket: aws.String(h.bucket),
 		Key:    aws.String(key),
 	}
-	if rng := r.Header.Get("Range"); rng != "" {
+	rng := r.Header.Get("Range")
+	if rng != "" {
 		in.Range = aws.String(rng)
 	}
 	if inm := r.Header.Get("If-None-Match"); inm != "" {
@@ -153,10 +161,42 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, key string) (int, 
 			in.IfModifiedSince = aws.Time(t)
 		}
 	}
+	// If-Range only has meaning alongside Range: honor the Range only if
+	// the validator still matches, otherwise return the full body. S3 has
+	// no If-Range, so translate it to a precondition on the ranged GET
+	// (IfMatch for an entity-tag, IfUnmodifiedSince for a date) and, on
+	// 412, retry once without the range to return the full representation.
+	ifRangeApplied := false
+	if rng != "" {
+		if ir := r.Header.Get("If-Range"); ir != "" {
+			if isETagValue(ir) {
+				in.IfMatch = aws.String(ir)
+				ifRangeApplied = true
+			} else if t, err := http.ParseTime(ir); err == nil {
+				in.IfUnmodifiedSince = aws.Time(t)
+				ifRangeApplied = true
+			}
+			// A value that is neither an entity-tag nor a valid date is
+			// malformed; ignore it and serve the range normally.
+		}
+	}
 
 	out, err := h.store.GetObject(r.Context(), in)
 	if err != nil {
-		return h.writeError(w, r, err), 0
+		// IfMatch/IfUnmodifiedSince are only ever set for If-Range, so a
+		// 412 here means the validator no longer matches: drop the range
+		// and its precondition and return the full representation.
+		if ifRangeApplied {
+			if status, _ := s3client.Classify(err); status == http.StatusPreconditionFailed {
+				in.Range = nil
+				in.IfMatch = nil
+				in.IfUnmodifiedSince = nil
+				out, err = h.store.GetObject(r.Context(), in)
+			}
+		}
+		if err != nil {
+			return h.writeError(w, r, err), 0
+		}
 	}
 	defer out.Body.Close()
 

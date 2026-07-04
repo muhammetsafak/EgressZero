@@ -163,6 +163,128 @@ func TestGetRange(t *testing.T) {
 	}
 }
 
+func TestIfRange(t *testing.T) {
+	t.Run("matching etag forwards IfMatch and serves 206", func(t *testing.T) {
+		out, _ := getOut("abcd", func(o *s3.GetObjectOutput) {
+			o.ContentRange = aws.String("bytes 0-3/26")
+		})
+		fake := &fakeStore{getOut: out}
+		h := testHandler(fake, nil)
+
+		w := doGet(h, "/big.bin", http.Header{
+			"Range":    []string{"bytes=0-3"},
+			"If-Range": []string{`"abc123"`},
+		})
+
+		if w.Code != http.StatusPartialContent {
+			t.Fatalf("status = %d, want 206", w.Code)
+		}
+		if got := aws.ToString(fake.lastGet.IfMatch); got != `"abc123"` {
+			t.Errorf("IfMatch = %q, want forwarded etag", got)
+		}
+		if fake.lastGet.IfUnmodifiedSince != nil {
+			t.Error("IfUnmodifiedSince should be unset for an etag If-Range")
+		}
+	})
+
+	t.Run("stale etag retries without range and serves full 200", func(t *testing.T) {
+		full := "abcdefghijklmnopqrstuvwxyz"
+		var calls int
+		var sawRangeOnRetry bool
+		fake := &fakeStore{getFn: func(_ context.Context, in *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
+			calls++
+			if calls == 1 {
+				// First (ranged) call: validator no longer matches.
+				return nil, sdkResponseErr("GetObject", http.StatusPreconditionFailed, nil)
+			}
+			sawRangeOnRetry = in.Range != nil || in.IfMatch != nil
+			out, _ := getOut(full, nil)
+			return out, nil
+		}}
+		h := testHandler(fake, nil)
+
+		w := doGet(h, "/big.bin", http.Header{
+			"Range":    []string{"bytes=0-3"},
+			"If-Range": []string{`"stale"`},
+		})
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (full body)", w.Code)
+		}
+		if calls != 2 {
+			t.Fatalf("GetObject called %d times, want 2 (ranged then full)", calls)
+		}
+		if sawRangeOnRetry {
+			t.Error("retry must drop Range and IfMatch")
+		}
+		if got := w.Body.String(); got != full {
+			t.Errorf("body = %q, want full representation", got)
+		}
+		if got := w.Header().Get("Content-Range"); got != "" {
+			t.Errorf("Content-Range = %q, want empty on full-body fallback", got)
+		}
+	})
+
+	t.Run("date form forwards IfUnmodifiedSince", func(t *testing.T) {
+		out, _ := getOut("abcd", func(o *s3.GetObjectOutput) {
+			o.ContentRange = aws.String("bytes 0-3/26")
+		})
+		fake := &fakeStore{getOut: out}
+		h := testHandler(fake, nil)
+
+		doGet(h, "/big.bin", http.Header{
+			"Range":    []string{"bytes=0-3"},
+			"If-Range": []string{"Fri, 02 Jan 2026 03:04:05 GMT"},
+		})
+
+		if fake.lastGet.IfUnmodifiedSince == nil ||
+			!fake.lastGet.IfUnmodifiedSince.Equal(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)) {
+			t.Errorf("IfUnmodifiedSince = %v, want parsed date", fake.lastGet.IfUnmodifiedSince)
+		}
+		if fake.lastGet.IfMatch != nil {
+			t.Error("IfMatch should be unset for a date If-Range")
+		}
+	})
+
+	t.Run("ignored without a Range header", func(t *testing.T) {
+		out, _ := getOut("x", nil)
+		fake := &fakeStore{getOut: out}
+		h := testHandler(fake, nil)
+
+		w := doGet(h, "/a", http.Header{"If-Range": []string{`"abc123"`}})
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if fake.lastGet.IfMatch != nil || fake.lastGet.IfUnmodifiedSince != nil {
+			t.Error("If-Range must be ignored when no Range is present")
+		}
+	})
+
+	t.Run("malformed value is ignored and range is served", func(t *testing.T) {
+		out, _ := getOut("abcd", func(o *s3.GetObjectOutput) {
+			o.ContentRange = aws.String("bytes 0-3/26")
+		})
+		fake := &fakeStore{getOut: out}
+		h := testHandler(fake, nil)
+
+		w := doGet(h, "/big.bin", http.Header{
+			"Range":    []string{"bytes=0-3"},
+			"If-Range": []string{"not-an-etag-or-date"},
+		})
+
+		if w.Code != http.StatusPartialContent {
+			t.Fatalf("status = %d, want 206", w.Code)
+		}
+		if fake.lastGet.IfMatch != nil || fake.lastGet.IfUnmodifiedSince != nil {
+			t.Error("malformed If-Range must not set any precondition")
+		}
+		if got := aws.ToString(fake.lastGet.Range); got != "bytes=0-3" {
+			t.Errorf("Range = %q, want forwarded", got)
+		}
+	})
+}
+
 func TestConditionalHeadersForwarded(t *testing.T) {
 	out, _ := getOut("x", nil)
 	fake := &fakeStore{getOut: out}
