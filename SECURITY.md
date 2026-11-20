@@ -9,7 +9,7 @@ Only the latest release receives security fixes.
 Please **do not** open a public issue for security problems.
 
 - Preferred: use GitHub's [private vulnerability reporting](https://github.com/muhammetsafak/EgressZero/security/advisories/new) on this repository.
-- Alternatively, email [info@muhammetsafak.com.tr](mailto:info@muhammetsafak.com.tr).
+- Alternatively, email [info@muhammetsafak.com](mailto:info@muhammetsafak.com).
 
 You will get an initial response within a few days. Please include steps to reproduce and the impact you foresee.
 
